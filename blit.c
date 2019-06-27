@@ -20,19 +20,25 @@ getDisplay() {
   return display;
 }
 
-XColor
-getColor(unsigned short red,
+XColor*
+getColor(Display *display,
+         int screen,
+         unsigned short red,
          unsigned short green,
          unsigned short blue) {
   /* Return a new XColor structure */
   /* Initialize it with RGB */
-  XColor xcolor;
 
-  xcolor.red = red;
-  xcolor.green = green;
-  xcolor.blue = blue;
+  XColor *xcolor = malloc(sizeof (XColor));
 
-  xcolor.flags = DoRed | DoGreen | DoBlue;
+  xcolor->red = red;
+  xcolor->green = green;
+  xcolor->blue = blue;
+
+  xcolor->flags = DoRed | DoGreen | DoBlue;
+  XAllocColor(display,
+              XDefaultColormap(display, screen),
+              xcolor);
 
   return xcolor;
 }
@@ -42,19 +48,11 @@ main(void) {
   Window window;
   XEvent event;
 
-  const char *msg = "Hello, world!\n";
-
-  XColor xcolor = getColor(0xffff, 0xffff, 0xffff);
-
   Display *display = getDisplay();
-
   int screen = DefaultScreen(display);
-
   GC gc = XDefaultGC(display, screen);
 
-  XAllocColor(display,
-              XDefaultColormap(display, screen),
-              &xcolor);
+  XColor *xcolor = getColor(display, screen, 0xffff, 0xffff, 0xffff);
 
   window = XCreateSimpleWindow(display,
                                RootWindow(display, screen),
@@ -64,9 +62,7 @@ main(void) {
                                100,
                                1,
                                WhitePixel(display, screen),
-                               xcolor.pixel);
-
-  printf("%p\n", window);
+                               xcolor->pixel);
 
   XSelectInput(display,
                window,
@@ -98,13 +94,9 @@ main(void) {
     XNextEvent(display, &event);
     if (event.type == Expose) {
 
-      XColor boxcolor = getColor(32000, 0, 32000);
+      XColor *boxcolor = getColor(display, screen, 32000, 0, 32000);
 
-      XAllocColor(display,
-                  XDefaultColormap(display, screen),
-                  &boxcolor);
-
-      XSetForeground(display, gc, boxcolor.pixel);
+      XSetForeground(display, gc, boxcolor->pixel);
 
     }
 
