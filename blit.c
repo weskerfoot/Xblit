@@ -100,9 +100,9 @@ main(void) {
 
     }
 
-    if (event.type == KeyPress) {
-      break;
-    }
+    //if (event.type == KeyPress) {
+      //break;
+    //}
 
     for(int x = 0; x < 100; x++) {
       for(int y = 0; y < 100; y++) {
@@ -111,6 +111,8 @@ main(void) {
     }
 
     factor++;
+
+    XClearWindow(display, window);
 
     XCopyArea(display,
               pixmap,
