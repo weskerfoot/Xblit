@@ -28,6 +28,15 @@
   * See here https://xcb.freedesktop.org/tutorial/events/
   */
 
+/* TODO
+ *
+ * Figure out what resources need to be free'd and figure out a strategy for allocating things better
+ * Figure out a better way of managing the event loop than nanosleep?
+ * Figure out which events we need to actually be handling
+ * Figure out how to resize dynamically (See handmade hero videos for tips)
+ * Figure out good strategy for only copying changed pixels to window
+ */
+
 xcb_connection_t*
 getDisplay() {
   /* Get a display to use */
@@ -83,6 +92,45 @@ getWindow(xcb_connection_t *display,
   return window;
 }
 
+xcb_alloc_color_reply_t*
+getColor(xcb_connection_t *display,
+         xcb_screen_t *screen,
+         xcb_window_t window,
+         unsigned short red,
+         unsigned short green,
+         unsigned short blue) {
+  /* Return a new xcb color structure */
+  /* Initialize it with RGB */
+
+  xcb_colormap_t colormapId = xcb_generate_id(display);
+
+  xcb_create_colormap(display,
+                      XCB_COLORMAP_ALLOC_NONE,
+                      colormapId,
+                      window,
+                      screen->root_visual);
+
+
+  xcb_alloc_color_reply_t *reply = xcb_alloc_color_reply(display,
+                                                         xcb_alloc_color(display,
+                                                                         colormapId,
+                                                                         red,
+                                                                         green,
+                                                                         blue),
+                                                         NULL);
+
+  return reply;
+}
+
+static struct timespec
+genSleep(time_t sec,
+         long nanosec) {
+  struct timespec t;
+  t.tv_sec = sec;
+  t.tv_nsec = nanosec;
+  return t;
+}
+
 int
 main(void) {
 
@@ -94,13 +142,18 @@ main(void) {
 
   xcb_map_window(display, window);
 
+  xcb_alloc_color_reply_t *xcolor = getColor(display,
+                                             screen,
+                                             window,
+                                             0xffff,
+                                             0xffff,
+                                             0xffff);
+
   xcb_flush(display);
 
-  struct timespec req;
-  struct timespec rem;
-
-  req.tv_sec = 0;
-  req.tv_nsec = 20000000;
+  /* Used to handle the event loop */
+  struct timespec req = genSleep(0, 20000000);
+  struct timespec rem = genSleep(0, 0);
 
   /* Our event! */
   xcb_generic_event_t *event;
