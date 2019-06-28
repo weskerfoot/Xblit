@@ -1,6 +1,7 @@
 #! /usr/bin/env bash
 
 
-xlib=$(pkg-config --cflags --libs x11)
+args=$(pkg-config --cflags --libs xcb x11)
 
-gcc $xlib blit.c
+#gcc $args blit.c
+gcc $args blit2.c
