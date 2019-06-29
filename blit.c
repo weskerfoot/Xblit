@@ -1,16 +1,62 @@
-#include <X11/Xcms.h>
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 #include <time.h>
+#include <unistd.h>
+#include <xcb/xcb.h>
 
-Display*
+
+/* Macro definition to parse X server events
+ * The ~0x80 is needed to get the lower 7 bits
+ * XCB supports exactly the events specified in the protocol (33 events).
+ * This structure contains the type of event received (including a bit for whether it came from the server or another client),
+ * as well as the data associated with the event
+ * (e.g. position on the screen where the event was generated,
+ * mouse button associated with the event,
+ * region of the screen associated with a "redraw" event, etc).
+ * The way to read the event's data depends on the event type.
+ */
+#define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
+
+/*
+ * Here is the definition of xcb_cw_t
+    typedef enum {
+        XCB_CW_BACK_PIXMAP       = 1L<<0,
+        XCB_CW_BACK_PIXEL        = 1L<<1,
+        XCB_CW_BORDER_PIXMAP     = 1L<<2,
+        XCB_CW_BORDER_PIXEL      = 1L<<3,
+        XCB_CW_BIT_GRAVITY       = 1L<<4,
+        XCB_CW_WIN_GRAVITY       = 1L<<5,
+        XCB_CW_BACKING_STORE     = 1L<<6,
+        XCB_CW_BACKING_PLANES    = 1L<<7,
+        XCB_CW_BACKING_PIXEL     = 1L<<8,
+        XCB_CW_OVERRIDE_REDIRECT = 1L<<9,
+        XCB_CW_SAVE_UNDER        = 1L<<10,
+        XCB_CW_EVENT_MASK        = 1L<<11,
+        XCB_CW_DONT_PROPAGATE    = 1L<<12,
+        XCB_CW_COLORMAP          = 1L<<13,
+        XCB_CW_CURSOR            = 1L<<14
+    } xcb_cw_t;
+  * Why does this matter?
+  * This lets us define what events we want to handle
+  * See here https://xcb.freedesktop.org/tutorial/events/
+  */
+
+/* TODO
+ *
+ * Figure out what resources need to be free'd and figure out a strategy for allocating things better
+ * Figure out a better way of managing the event loop than nanosleep?
+ * Figure out which events we need to actually be handling
+ * Figure out how to resize dynamically (See handmade hero videos for tips)
+ * Figure out good strategy for only copying changed pixels to window
+ * Figure out what allocations can fail and what to do if they fail
+ */
+
+xcb_connection_t*
 getDisplay() {
   /* Get a display to use */
   /* Currently just uses the default display */
-  Display *display = XOpenDisplay(NULL);
+
+  xcb_connection_t *display = xcb_connect (NULL, NULL);
 
   if (display == NULL) {
     fprintf(stderr, "Could not open the display! :(\n");
@@ -20,116 +66,160 @@ getDisplay() {
   return display;
 }
 
-XColor*
-getColor(Display *display,
-         int screen,
+xcb_screen_t*
+getScreen(xcb_connection_t *display) {
+  const xcb_setup_t *setup = xcb_get_setup(display);
+  xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
+  xcb_screen_t *screen = iter.data;
+
+  return screen;
+}
+
+xcb_window_t
+getWindow(xcb_connection_t *display,
+          xcb_screen_t *screen) {
+  /* Create the window */
+  xcb_window_t window = xcb_generate_id(display);
+
+  xcb_cw_t mask = XCB_CW_EVENT_MASK;
+
+  /* Define all the events we want to handle with xcb */
+  /* XCB_EVENT_MASK_EXPOSURE is the "exposure" event */
+  /* I.e. it fires when our window shows up on the screen */
+
+  uint32_t valwin[1] = { XCB_EVENT_MASK_EXPOSURE };
+
+  xcb_create_window(display, /* Connection */
+                    XCB_COPY_FROM_PARENT,  /* depth (same as root) */
+                    window, /* window Id */
+                    screen->root, /* parent window */
+                    0, /* x */
+                    0, /* y */
+                    150,
+                    150,/* width, height */
+                    10, /* border_width  */
+                    XCB_WINDOW_CLASS_INPUT_OUTPUT, /* class */
+                    screen->root_visual, /* visual */
+                    mask, /* value mask, used for events */
+                    valwin); /* masks, used for events */
+
+  return window;
+}
+
+xcb_alloc_color_reply_t*
+getColor(xcb_connection_t *display,
+         xcb_screen_t *screen,
+         xcb_window_t window,
          unsigned short red,
          unsigned short green,
          unsigned short blue) {
-  /* Return a new XColor structure */
+  /* Return a new xcb color structure */
   /* Initialize it with RGB */
 
-  XColor *xcolor = malloc(sizeof (XColor));
+  xcb_colormap_t colormapId = xcb_generate_id(display);
 
-  xcolor->red = red;
-  xcolor->green = green;
-  xcolor->blue = blue;
+  xcb_create_colormap(display,
+                      XCB_COLORMAP_ALLOC_NONE,
+                      colormapId,
+                      window,
+                      screen->root_visual);
 
-  xcolor->flags = DoRed | DoGreen | DoBlue;
-  XAllocColor(display,
-              XDefaultColormap(display, screen),
-              xcolor);
 
-  return xcolor;
+  xcb_alloc_color_reply_t *reply = xcb_alloc_color_reply(display,
+                                                         xcb_alloc_color(display,
+                                                                         colormapId,
+                                                                         red,
+                                                                         green,
+                                                                         blue),
+                                                         NULL);
+
+  return reply;
+}
+
+static struct timespec
+genSleep(time_t sec,
+         long nanosec) {
+  struct timespec t;
+  t.tv_sec = sec;
+  t.tv_nsec = nanosec;
+  return t;
+}
+
+static xcb_gcontext_t
+getGC(xcb_connection_t *display,
+      xcb_screen_t *screen) {
+
+  xcb_drawable_t window = screen->root;
+
+  xcb_gcontext_t foreground = xcb_generate_id(display);
+
+  uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+  uint32_t values[2] = {screen->black_pixel, 0};
+
+  xcb_create_gc(display,
+                foreground,
+                window,
+                mask,
+                values);
+
+  return foreground;
 }
 
 int
 main(void) {
-  Window window;
-  XEvent event;
 
-  Display *display = getDisplay();
-  int screen = DefaultScreen(display);
-  GC gc = XDefaultGC(display, screen);
+  xcb_connection_t *display = getDisplay();
 
-  XColor *xcolor = getColor(display, screen, 0xffff, 0xffff, 0xffff);
+  xcb_screen_t *screen = getScreen(display);
 
-  window = XCreateSimpleWindow(display,
-                               RootWindow(display, screen),
-                               10,
-                               10,
-                               100,
-                               100,
-                               1,
-                               WhitePixel(display, screen),
-                               xcolor->pixel);
+  xcb_window_t window = getWindow(display, screen);
 
-  XSelectInput(display,
-               window,
-               ExposureMask | KeyPressMask);
+  xcb_map_window(display, window);
 
-  XMapWindow(display, window);
+  xcb_alloc_color_reply_t *xcolor = getColor(display,
+                                             screen,
+                                             window,
+                                             0xffff,
+                                             0xffff,
+                                             0xffff);
 
-  int depth = DefaultDepth(display, DefaultScreen(display));
+  xcb_flush(display);
 
-  Pixmap pixmap;
-  pixmap = XCreatePixmap(display,
-                         window,
-                         100,
-                         100,
-                         depth);
+  /* Used to handle the event loop */
+  struct timespec req = genSleep(0, 20000000);
+  struct timespec rem = genSleep(0, 0);
 
-  int factor = 0;
-
-  struct timespec req;
-  struct timespec rem;
-
-  req.tv_sec = 0;
-  req.tv_nsec = 20000000;
+  xcb_generic_event_t *event;
+  xcb_expose_event_t *expose;
 
   while (1) {
-    /* Event loop that handles events from the X server's event queue */
-    /* Will actually block if there are no events */
+    event = xcb_poll_for_event(display);
 
-    XNextEvent(display, &event);
-    if (event.type == Expose) {
+    if (event != NULL) {
+      switch RECEIVE_EVENT(event) {
+        /* TODO encapsulate event handlers in functions */
+        case XCB_EXPOSE: {
+          expose = (xcb_expose_event_t *)event;
+          printf("Window %u exposed. Region to be redrawn at location (%u,%u), with dimension (%u,%u)\n",
+                 expose->window, expose->x,
+                 expose->y,
+                 expose->width,
+                 expose->height);
+          break;
+        }
 
-      XColor *boxcolor = getColor(display, screen, 32000, 0, 32000);
+        default: {
+          printf ("Unknown event: %u\n", event->response_type);
+          break;
+        }
 
-      XSetForeground(display, gc, boxcolor->pixel);
-
-    }
-
-    //if (event.type == KeyPress) {
-      //break;
-    //}
-
-    for(int x = 0; x < 100; x++) {
-      for(int y = 0; y < 100; y++) {
-        XDrawPoint(display, pixmap, gc, x, y);
+        free(event);
       }
     }
 
-    factor++;
-
-    XClearWindow(display, window);
-
-    XCopyArea(display,
-              pixmap,
-              window,
-              gc,
-              0,
-              0,
-              100,
-              100,
-              factor,
-              factor);
-
     nanosleep(&req, &rem);
-
   }
 
-  XCloseDisplay(display);
-
+  xcb_disconnect(display);
   return 0;
 }
