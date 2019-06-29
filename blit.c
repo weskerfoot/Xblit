@@ -4,6 +4,14 @@
 #include <unistd.h>
 #include <xcb/xcb.h>
 
+xcb_alloc_color_reply_t*
+getColor(xcb_connection_t*,
+         xcb_screen_t*,
+         xcb_window_t,
+         unsigned short,
+         unsigned short,
+         unsigned short);
+
 
 /* Macro definition to parse X server events
  * The ~0x80 is needed to get the lower 7 bits
@@ -81,13 +89,16 @@ getWindow(xcb_connection_t *display,
   /* Create the window */
   xcb_window_t window = xcb_generate_id(display);
 
-  xcb_cw_t mask = XCB_CW_EVENT_MASK;
+  xcb_cw_t mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
 
   /* Define all the events we want to handle with xcb */
   /* XCB_EVENT_MASK_EXPOSURE is the "exposure" event */
   /* I.e. it fires when our window shows up on the screen */
 
-  uint32_t valwin[1] = { XCB_EVENT_MASK_EXPOSURE };
+  uint32_t valwin[2];
+
+  valwin[0] = screen->white_pixel;
+  valwin[1] = XCB_EVENT_MASK_EXPOSURE;
 
   xcb_create_window(display, /* Connection */
                     XCB_COPY_FROM_PARENT,  /* depth (same as root) */
@@ -133,6 +144,12 @@ getColor(xcb_connection_t *display,
                                                                          blue),
                                                          NULL);
 
+  /* TODO, make sure colors get free'd after they're used?
+   * Might not be necessary to free them if we only ever allocate one of each color
+   * Linux will make sure resources are cleaned up after the program exits
+   * We just have to make sure we don't leak colors
+   */
+
   return reply;
 }
 
@@ -153,8 +170,17 @@ getGC(xcb_connection_t *display,
 
   xcb_gcontext_t foreground = xcb_generate_id(display);
 
+  xcb_alloc_color_reply_t *xcolor = getColor(display,
+                                             screen,
+                                             window,
+                                             0xffff,
+                                             0,
+                                             0);
+
+
+
   uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
-  uint32_t values[2] = {screen->black_pixel, 0};
+  uint32_t values[2] = {xcolor->pixel, 0};
 
   xcb_create_gc(display,
                 foreground,
@@ -183,6 +209,8 @@ main(void) {
                                              0xffff,
                                              0xffff);
 
+  printf("%d\n", xcolor->pixel);
+
   xcb_flush(display);
 
   /* Used to handle the event loop */
@@ -191,6 +219,13 @@ main(void) {
 
   xcb_generic_event_t *event;
   xcb_expose_event_t *expose;
+
+  xcb_gcontext_t gc = getGC(display,
+                            screen);
+
+  xcb_point_t points[] = {{10, 10}, {10, 20}, {20, 10}, {20, 20}};
+
+  xcb_rectangle_t rectangles[] = {{ 10, 50, 40, 20},{ 80, 50, 10, 40}};
 
   while (1) {
     event = xcb_poll_for_event(display);
@@ -205,6 +240,10 @@ main(void) {
                  expose->y,
                  expose->width,
                  expose->height);
+
+          xcb_poly_line(display, XCB_COORD_MODE_ORIGIN, window, gc, 4, points);
+          xcb_poly_rectangle(display, window, gc, 2, rectangles);
+          xcb_flush(display);
           break;
         }
 
