@@ -4,6 +4,19 @@
 #include <unistd.h>
 #include <xcb/xcb.h>
 
+
+/* Macro definition to parse X server events
+ * The ~0x80 is needed to get the lower 7 bits
+ * XCB supports exactly the events specified in the protocol (33 events).
+ * This structure contains the type of event received (including a bit for whether it came from the server or another client),
+ * as well as the data associated with the event
+ * (e.g. position on the screen where the event was generated,
+ * mouse button associated with the event,
+ * region of the screen associated with a "redraw" event, etc).
+ * The way to read the event's data depends on the event type.
+ */
+#define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
+
 /*
  * Here is the definition of xcb_cw_t
     typedef enum {
@@ -35,6 +48,7 @@
  * Figure out which events we need to actually be handling
  * Figure out how to resize dynamically (See handmade hero videos for tips)
  * Figure out good strategy for only copying changed pixels to window
+ * Figure out what allocations can fail and what to do if they fail
  */
 
 xcb_connection_t*
@@ -131,6 +145,26 @@ genSleep(time_t sec,
   return t;
 }
 
+static xcb_gcontext_t
+getGC(xcb_connection_t *display,
+      xcb_screen_t *screen) {
+
+  xcb_drawable_t window = screen->root;
+
+  xcb_gcontext_t foreground = xcb_generate_id(display);
+
+  uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
+  uint32_t values[2] = {screen->black_pixel, 0};
+
+  xcb_create_gc(display,
+                foreground,
+                window,
+                mask,
+                values);
+
+  return foreground;
+}
+
 int
 main(void) {
 
@@ -155,7 +189,6 @@ main(void) {
   struct timespec req = genSleep(0, 20000000);
   struct timespec rem = genSleep(0, 0);
 
-  /* Our event! */
   xcb_generic_event_t *event;
   xcb_expose_event_t *expose;
 
@@ -163,20 +196,8 @@ main(void) {
     event = xcb_poll_for_event(display);
 
     if (event != NULL) {
-      printf("Got an event\n");
-
-      /* The ~0x80 is needed to get the lower 7 bits
-       * Per the docs:
-       * A structure is used to pass events received from the X server.
-       * XCB supports exactly the events specified in the protocol (33 events).
-       * This structure contains the type of event received (including a bit for whether it came from the server or another client),
-       * as well as the data associated with the event
-       * (e.g. position on the screen where the event was generated,
-       * mouse button associated with the event,
-       * region of the screen associated with a "redraw" event, etc).
-       * The way to read the event's data depends on the event type.
-       */
-      switch (event->response_type & ~0x80) {
+      switch RECEIVE_EVENT(event) {
+        /* TODO encapsulate event handlers in functions */
         case XCB_EXPOSE: {
           expose = (xcb_expose_event_t *)event;
           printf("Window %u exposed. Region to be redrawn at location (%u,%u), with dimension (%u,%u)\n",
@@ -188,12 +209,10 @@ main(void) {
         }
 
         default: {
-          /* Unknown event type, ignore it */
-          printf ("Unknown event: %PRIu8\n", event->response_type);
+          printf ("Unknown event: %u\n", event->response_type);
           break;
         }
 
-        /* Events have to be explicitly free'd */
         free(event);
       }
     }
