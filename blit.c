@@ -6,45 +6,18 @@
 
 xcb_alloc_color_reply_t*
 getColor(xcb_connection_t*,
-         xcb_screen_t*,
-         xcb_window_t,
+         xcb_colormap_t,
          unsigned short,
          unsigned short,
          unsigned short);
 
-
 /* Macro definition to parse X server events
  * The ~0x80 is needed to get the lower 7 bits
- * XCB supports exactly the events specified in the protocol (33 events).
- * This structure contains the type of event received (including a bit for whether it came from the server or another client),
- * as well as the data associated with the event
- * (e.g. position on the screen where the event was generated,
- * mouse button associated with the event,
- * region of the screen associated with a "redraw" event, etc).
- * The way to read the event's data depends on the event type.
  */
 #define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
 
 /*
  * Here is the definition of xcb_cw_t
-    typedef enum {
-        XCB_CW_BACK_PIXMAP       = 1L<<0,
-        XCB_CW_BACK_PIXEL        = 1L<<1,
-        XCB_CW_BORDER_PIXMAP     = 1L<<2,
-        XCB_CW_BORDER_PIXEL      = 1L<<3,
-        XCB_CW_BIT_GRAVITY       = 1L<<4,
-        XCB_CW_WIN_GRAVITY       = 1L<<5,
-        XCB_CW_BACKING_STORE     = 1L<<6,
-        XCB_CW_BACKING_PLANES    = 1L<<7,
-        XCB_CW_BACKING_PIXEL     = 1L<<8,
-        XCB_CW_OVERRIDE_REDIRECT = 1L<<9,
-        XCB_CW_SAVE_UNDER        = 1L<<10,
-        XCB_CW_EVENT_MASK        = 1L<<11,
-        XCB_CW_DONT_PROPAGATE    = 1L<<12,
-        XCB_CW_COLORMAP          = 1L<<13,
-        XCB_CW_CURSOR            = 1L<<14
-    } xcb_cw_t;
-  * Why does this matter?
   * This lets us define what events we want to handle
   * See here https://xcb.freedesktop.org/tutorial/events/
   */
@@ -52,7 +25,7 @@ getColor(xcb_connection_t*,
 /* TODO
  *
  * Figure out what resources need to be free'd and figure out a strategy for allocating things better
- * Figure out a better way of managing the event loop than nanosleep?
+ * Figure out a better way of managing the event loop than nanosleep? (clock_nanosleep maybe)
  * Figure out which events we need to actually be handling
  * Figure out how to resize dynamically (See handmade hero videos for tips)
  * Figure out good strategy for only copying changed pixels to window
@@ -76,6 +49,7 @@ getDisplay() {
 
 xcb_screen_t*
 getScreen(xcb_connection_t *display) {
+  /* Gets a screen from the display connection */
   const xcb_setup_t *setup = xcb_get_setup(display);
   xcb_screen_iterator_t iter = xcb_setup_roots_iterator(setup);
   xcb_screen_t *screen = iter.data;
@@ -95,19 +69,16 @@ getWindow(xcb_connection_t *display,
   /* XCB_EVENT_MASK_EXPOSURE is the "exposure" event */
   /* I.e. it fires when our window shows up on the screen */
 
-  uint32_t valwin[2];
+  uint32_t valwin[2] = {screen->white_pixel, XCB_EVENT_MASK_EXPOSURE};
 
-  valwin[0] = screen->white_pixel;
-  valwin[1] = XCB_EVENT_MASK_EXPOSURE;
-
-  xcb_create_window(display, /* Connection */
+  xcb_create_window(display,
                     XCB_COPY_FROM_PARENT,  /* depth (same as root) */
-                    window, /* window Id */
+                    window,
                     screen->root, /* parent window */
                     0, /* x */
                     0, /* y */
-                    150,
-                    150,/* width, height */
+                    150,/* width */
+                    150,/* height */
                     10, /* border_width  */
                     XCB_WINDOW_CLASS_INPUT_OUTPUT, /* class */
                     screen->root_visual, /* visual */
@@ -117,16 +88,10 @@ getWindow(xcb_connection_t *display,
   return window;
 }
 
-xcb_alloc_color_reply_t*
-getColor(xcb_connection_t *display,
-         xcb_screen_t *screen,
-         xcb_window_t window,
-         unsigned short red,
-         unsigned short green,
-         unsigned short blue) {
-  /* Return a new xcb color structure */
-  /* Initialize it with RGB */
-
+static xcb_colormap_t
+allocateColorMap(xcb_connection_t *display,
+                 xcb_window_t window,
+                 xcb_screen_t *screen) {
   xcb_colormap_t colormapId = xcb_generate_id(display);
 
   xcb_create_colormap(display,
@@ -134,11 +99,21 @@ getColor(xcb_connection_t *display,
                       colormapId,
                       window,
                       screen->root_visual);
+  return colormapId;
+}
 
+xcb_alloc_color_reply_t*
+getColor(xcb_connection_t *display,
+         xcb_colormap_t colormap,
+         unsigned short red,
+         unsigned short green,
+         unsigned short blue) {
+  /* Return a new xcb color structure */
+  /* Initialize it with RGB */
 
   xcb_alloc_color_reply_t *reply = xcb_alloc_color_reply(display,
                                                          xcb_alloc_color(display,
-                                                                         colormapId,
+                                                                         colormap,
                                                                          red,
                                                                          green,
                                                                          blue),
@@ -164,20 +139,18 @@ genSleep(time_t sec,
 
 static xcb_gcontext_t
 getGC(xcb_connection_t *display,
-      xcb_screen_t *screen) {
+      xcb_screen_t *screen,
+      xcb_colormap_t colormap) {
 
   xcb_drawable_t window = screen->root;
 
   xcb_gcontext_t foreground = xcb_generate_id(display);
 
   xcb_alloc_color_reply_t *xcolor = getColor(display,
-                                             screen,
-                                             window,
+                                             colormap,
                                              0xffff,
                                              0,
                                              0);
-
-
 
   uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
   uint32_t values[2] = {xcolor->pixel, 0};
@@ -191,26 +164,43 @@ getGC(xcb_connection_t *display,
   return foreground;
 }
 
+static xcb_pixmap_t
+allocatePixmap(xcb_connection_t *display,
+               xcb_screen_t *screen,
+               xcb_window_t window,
+               uint32_t width,
+               uint32_t height) {
+  xcb_pixmap_t pixmapId = xcb_generate_id(display);
+
+  xcb_create_pixmap(display,
+                    screen->root_depth,
+                    pixmapId,
+                    window,
+                    width,
+                    height);
+
+  return pixmapId;
+}
+
 int
 main(void) {
 
+  /* Open up the display */
   xcb_connection_t *display = getDisplay();
 
+  /* Get a handle to the screen */
   xcb_screen_t *screen = getScreen(display);
 
+  /* Create a window */
   xcb_window_t window = getWindow(display, screen);
 
+  /* Map the window to the display */
   xcb_map_window(display, window);
 
-  xcb_alloc_color_reply_t *xcolor = getColor(display,
-                                             screen,
-                                             window,
-                                             0xffff,
-                                             0xffff,
-                                             0xffff);
+  /* Allocate a colormap, for creating colors */
+  xcb_colormap_t colormap = allocateColorMap(display, window, screen);
 
-  printf("%d\n", xcolor->pixel);
-
+  /* Flush all commands */
   xcb_flush(display);
 
   /* Used to handle the event loop */
@@ -221,11 +211,15 @@ main(void) {
   xcb_expose_event_t *expose;
 
   xcb_gcontext_t gc = getGC(display,
-                            screen);
+                            screen,
+                            colormap);
 
-  xcb_point_t points[] = {{10, 10}, {10, 20}, {20, 10}, {20, 20}};
-
-  xcb_rectangle_t rectangles[] = {{ 10, 50, 40, 20},{ 80, 50, 10, 40}};
+  /* Allocate a pixmap we will be blitting to the window */
+  xcb_pixmap_t pixmap = allocatePixmap(display,
+                                       screen,
+                                       window,
+                                       100,
+                                       100);
 
   while (1) {
     event = xcb_poll_for_event(display);
@@ -241,8 +235,30 @@ main(void) {
                  expose->width,
                  expose->height);
 
-          xcb_poly_line(display, XCB_COORD_MODE_ORIGIN, window, gc, 4, points);
-          xcb_poly_rectangle(display, window, gc, 2, rectangles);
+          /*
+           * One important note should be made:
+           * it is possible to create pixmaps with different depths on the same screen.
+           * When we perform copy operations (a pixmap onto a window, etc),
+           * we should make sure that both source and target have the same depth.
+           * If they have a different depth, the operation will fail.
+           * The exception to this is if we copy a specific bit plane of the source pixmap using xcb_copy_plane().
+           * In such an event, we can copy a specific plane to the target window
+           * (in actuality, setting a specific bit in the color of each pixel copied).
+           * This can be used to generate strange graphic effects in a window, but that is beyond the scope of this tutorial.
+           */
+
+          xcb_copy_area(display,
+                        pixmap,
+                        window,
+                        gc,
+                        0, /* top left x coord */
+                        0, /* top left y coord */
+                        100, /* top left x coord of dest*/
+                        100, /* top left y coord of dest*/
+                        100, /* pixel width of source */
+                        100 /* pixel height of source */
+                        );
+
           xcb_flush(display);
           break;
         }
@@ -261,4 +277,5 @@ main(void) {
 
   xcb_disconnect(display);
   return 0;
+
 }
