@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -59,7 +60,9 @@ getScreen(xcb_connection_t *display) {
 
 xcb_window_t
 getWindow(xcb_connection_t *display,
-          xcb_screen_t *screen) {
+          xcb_screen_t *screen,
+          uint16_t width,
+          uint16_t height) {
   /* Create the window */
   xcb_window_t window = xcb_generate_id(display);
 
@@ -77,8 +80,8 @@ getWindow(xcb_connection_t *display,
                     screen->root, /* parent window */
                     0, /* x */
                     0, /* y */
-                    150,/* width */
-                    150,/* height */
+                    width,/* width */
+                    height,/* height */
                     10, /* border_width  */
                     XCB_WINDOW_CLASS_INPUT_OUTPUT, /* class */
                     screen->root_visual, /* visual */
@@ -140,7 +143,10 @@ genSleep(time_t sec,
 static xcb_gcontext_t
 getGC(xcb_connection_t *display,
       xcb_screen_t *screen,
-      xcb_colormap_t colormap) {
+      xcb_colormap_t colormap,
+      unsigned short r,
+      unsigned short g,
+      unsigned short b) {
 
   xcb_drawable_t window = screen->root;
 
@@ -148,9 +154,9 @@ getGC(xcb_connection_t *display,
 
   xcb_alloc_color_reply_t *xcolor = getColor(display,
                                              colormap,
-                                             0xffff,
-                                             0,
-                                             0);
+                                             r,
+                                             g,
+                                             b);
 
   uint32_t mask = XCB_GC_FOREGROUND | XCB_GC_GRAPHICS_EXPOSURES;
   uint32_t values[2] = {xcolor->pixel, 0};
@@ -182,8 +188,34 @@ allocatePixmap(xcb_connection_t *display,
   return pixmapId;
 }
 
+
+xcb_point_t*
+genPoints(uint16_t height,
+          uint16_t width) {
+  xcb_point_t *points = malloc( sizeof(xcb_point_t) * height * width);
+
+  xcb_point_t point;
+
+  int i = 0;
+
+  for (uint16_t x = 0; x < width; x++) {
+    for(uint16_t y = 0; y < height; y++) {
+      point.x = x;
+      point.y = y;
+      points[i] = point;
+      i++;
+    }
+  }
+
+  assert(i == (width*height));
+
+  return points;
+}
+
 int
 main(void) {
+  uint16_t window_width = 500;
+  uint16_t window_height = 500;
 
   /* Open up the display */
   xcb_connection_t *display = getDisplay();
@@ -192,7 +224,10 @@ main(void) {
   xcb_screen_t *screen = getScreen(display);
 
   /* Create a window */
-  xcb_window_t window = getWindow(display, screen);
+  xcb_window_t window = getWindow(display,
+                                  screen,
+                                  window_width,
+                                  window_height);
 
   /* Map the window to the display */
   xcb_map_window(display, window);
@@ -212,21 +247,18 @@ main(void) {
 
   xcb_gcontext_t gc = getGC(display,
                             screen,
-                            colormap);
-
-  /* Allocate a pixmap we will be blitting to the window */
-  xcb_pixmap_t pixmap = allocatePixmap(display,
-                                       screen,
-                                       window,
-                                       100,
-                                       100);
-
+                            colormap,
+                            0,
+                            0xffff,
+                            0);
   while (1) {
     event = xcb_poll_for_event(display);
 
     if (event != NULL) {
       switch RECEIVE_EVENT(event) {
+
         /* TODO encapsulate event handlers in functions */
+
         case XCB_EXPOSE: {
           expose = (xcb_expose_event_t *)event;
           printf("Window %u exposed. Region to be redrawn at location (%u,%u), with dimension (%u,%u)\n",
@@ -234,6 +266,9 @@ main(void) {
                  expose->y,
                  expose->width,
                  expose->height);
+
+          window_width = expose->width;
+          window_height = expose->height;
 
           /*
            * One important note should be made:
@@ -247,19 +282,38 @@ main(void) {
            * This can be used to generate strange graphic effects in a window, but that is beyond the scope of this tutorial.
            */
 
+
+          /* Allocate a pixmap we will be blitting to the window */
+          xcb_pixmap_t pixmap = allocatePixmap(display,
+                                               screen,
+                                               window,
+                                               window_width,
+                                               window_height);
+
+          xcb_point_t *points = genPoints(window_width, window_height);
+
+          xcb_poly_point (display,               /* The connection to the X server */
+                          XCB_COORD_MODE_ORIGIN, /* Coordinate mode, usually set to XCB_COORD_MODE_ORIGIN */
+                          pixmap,        /* The drawable on which we want to draw the point(s) */
+                          gc,              /* The Graphic Context we use to draw the point(s) */
+                          window_width*window_height,      /* The number of points */
+                          points);         /* An array of points */
+
           xcb_copy_area(display,
                         pixmap,
                         window,
                         gc,
-                        0, /* top left x coord */
-                        0, /* top left y coord */
-                        100, /* top left x coord of dest*/
-                        100, /* top left y coord of dest*/
-                        100, /* pixel width of source */
-                        100 /* pixel height of source */
+                        expose->x, /* top left x coord */
+                        expose->y, /* top left y coord */
+                        expose->x, /* top left x coord of dest*/
+                        expose->y, /* top left y coord of dest*/
+                        window_width, /* pixel width of source */
+                        window_height /* pixel height of source */
                         );
 
           xcb_flush(display);
+          free(points);
+          xcb_free_pixmap(display, pixmap);
           break;
         }
 
