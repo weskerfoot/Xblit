@@ -203,8 +203,10 @@ genPoints(uint16_t height,
 
   int i = 0;
 
-  for (uint16_t x = 0; x < width; x++) {
-    for(uint16_t y = 0; y < height; y++) {
+  printf("width = %d, height = %d\n", width, height);
+
+  for (uint16_t x = 0; x < height; x++) {
+    for(uint16_t y = 0; y < width; y++) {
       point.x = x;
       point.y = y;
       points[i] = point;
