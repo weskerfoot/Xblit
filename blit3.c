@@ -13,7 +13,7 @@ getWindow(xcb_connection_t*,
           xcb_screen_t*);
 
 xcb_colormap_t
-allocateColorMap(xcb_connection_t*,
+getColorMap(xcb_connection_t*,
                  xcb_screen_t*,
                  int);
 
@@ -119,14 +119,17 @@ setup_and_run(Display* display,
 
     /* Select first framebuffer config and query visualID */
     GLXFBConfig fb_config = fb_configs[0];
+
+    /* This will write the visualID */
     glXGetFBConfigAttrib(display, fb_config, GLX_VISUAL_ID , &visualID);
 
-    /* Create XID's for colormap and window */
-    xcb_colormap_t colormap = allocateColorMap(xcb_display, screen, visualID);
-
+    /* Create XIDs for colormap and window */
+    /* This is how we can use the Xlib GLX functions */
+    /* Since these XIDs are transferrable between xcb and xlib */
+    xcb_colormap_t colormap = getColorMap(xcb_display, screen, visualID);
     xcb_window_t window = getWindow(xcb_display, colormap, visualID, screen);
 
-    // NOTE: window must be mapped before glXMakeContextCurrent
+    /* NOTE: window must be mapped before glXMakeContextCurrent */
     xcb_map_window(xcb_display, window);
 
 
@@ -181,7 +184,6 @@ setup_and_run(Display* display,
     return retval;
 }
 
-
 GLXContext
 getGLXContext(Display *display,
               GLXFBConfig fb_config) {
@@ -203,9 +205,8 @@ getGLXContext(Display *display,
 
 }
 
-
 xcb_colormap_t
-allocateColorMap(xcb_connection_t *xcb_display,
+getColorMap(xcb_connection_t *xcb_display,
                  xcb_screen_t *screen,
                  int visualID) {
   /* Create XID's for colormap and window */
@@ -221,9 +222,7 @@ allocateColorMap(xcb_connection_t *xcb_display,
       );
 
   return colormap;
-
 }
-
 
 xcb_window_t
 getWindow(xcb_connection_t *xcb_display,
@@ -283,23 +282,22 @@ getXCBDisplay(Display *x_display) {
 }
 
 xcb_screen_t*
-getScreen(Display *display,
-          xcb_connection_t *xcb_display,
+getScreen(xcb_connection_t *xcb_display,
           int default_screen) {
 
     /* Find XCB screen */
     xcb_screen_t *screen = 0;
 
-    xcb_screen_iterator_t screen_iter = xcb_setup_roots_iterator(
-                                          xcb_get_setup(xcb_display)
-                                        );
+    /* Create an iterator of all available screens */
+    xcb_screen_iterator_t screen_iter;
+    screen_iter = xcb_setup_roots_iterator(xcb_get_setup(xcb_display));
 
     int screen_num = default_screen;
     printf("%d\n", screen_num);
 
     /* Handle multiple screens */
     /* We want screen number 0 */
-    while(screen_iter.rem && screen_num > 0) {
+    while (screen_iter.rem && screen_num > 0) {
       printf("%d\n", screen_num);
 
       screen_num--;
@@ -322,7 +320,7 @@ int main(int argc, char* argv[])
 
     int default_screen = DefaultScreen(display);
 
-    xcb_screen_t *screen = getScreen(display, xcb_display, default_screen);
+    xcb_screen_t *screen = getScreen(xcb_display, default_screen);
 
     /* Initialize window and OpenGL context, run main loop and deinitialize */
     int retval = setup_and_run(display, xcb_display, default_screen, screen);
