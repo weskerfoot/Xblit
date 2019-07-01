@@ -1,8 +1,13 @@
+#include <GL/gl.h>
+#include <GL/glx.h>
+#include <X11/Xlib-xcb.h> /* for XGetXCBConnection, link with libX11-xcb */
+#include <X11/Xlib.h>
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+#include <xcb/xcb.h>
 #include <xcb/xcb.h>
 
 xcb_alloc_color_reply_t*
