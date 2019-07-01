@@ -1,2 +1,2 @@
-set makeprg=./build.sh
+set makeprg=./build.sh\ %
 set autowrite

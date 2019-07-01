@@ -1,16 +1,21 @@
+#include <GL/gl.h>
+#include <GL/glx.h>
+#include <X11/Xlib-xcb.h> /* for XGetXCBConnection, link with libX11-xcb */
+#include <X11/Xlib.h>
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <X11/Xlib.h>
-#include <X11/Xlib-xcb.h> /* for XGetXCBConnection, link with libX11-xcb */
+#include <time.h>
+#include <unistd.h>
 #include <xcb/xcb.h>
-#include <GL/glx.h>
-#include <GL/gl.h>
 
 xcb_window_t
 getWindow(xcb_connection_t*,
           xcb_colormap_t,
           int,
-          xcb_screen_t*);
+          xcb_screen_t*,
+          uint16_t,
+          uint16_t);
 
 xcb_colormap_t
 getColorMap(xcb_connection_t*,
@@ -47,58 +52,95 @@ static int visual_attribs[] = {
  */
 #define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
 
-void draw() {
-    glClearColor(0.2, 0.4, 0.9, 1.0);
-    glClear(GL_COLOR_BUFFER_BIT);
+void draw(GLint offset) {
+  /* This is needed because now the contents of `drawable` are undefined */
+
+  printf("Drawing!\n");
+
+  glClearColor(0.0, 0.0, 0.0, 1.0);
+  glClear(GL_COLOR_BUFFER_BIT);
+
+  glMatrixMode(GL_PROJECTION);
+  glLoadIdentity();
+  glOrtho(0.0, 500, 500, 0.0, 0.0, 1.0);
+
+  glBegin(GL_POINTS);
+  for (int i = 0; i < 100; i++) {
+    glVertex2i(offset, i);
+  }
+  glEnd();
+
+}
+
+static struct timespec
+genSleep(time_t sec,
+         long nanosec) {
+  struct timespec t;
+  t.tv_sec = sec;
+  t.tv_nsec = nanosec;
+  return t;
 }
 
 int
-main_loop(Display *display,
-          xcb_connection_t *xcb_display,
-          xcb_window_t window,
-          GLXDrawable drawable) {
+message_loop(Display *display,
+             xcb_connection_t *xcb_display,
+             xcb_window_t window,
+             GLXDrawable drawable) {
 
     int running = 1;
 
-    while (running) {
-        /* Wait for event */
-        xcb_generic_event_t *event = xcb_wait_for_event(xcb_display);
-        if (!event) {
-            fprintf(stderr, "i/o error in xcb_wait_for_event");
-            return -1;
-        }
 
-        switch (RECEIVE_EVENT(event)) {
+    glClearColor(0.0, 0.0, 0.0, 1.0);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    GLint offset = 0;
+
+    /* Used to handle the event loop */
+    struct timespec req = genSleep(0, 20000000);
+    struct timespec rem = genSleep(0, 0);
+
+    while (running) {
+        /* Poll for events */
+
+        xcb_generic_event_t *event = xcb_poll_for_event(xcb_display);
+
+        if (event != NULL) {
+          switch (RECEIVE_EVENT(event)) {
             case XCB_KEY_PRESS:
                 /* Quit on key press */
-                running = 0;
+                // running = 0;
                 break;
             case XCB_EXPOSE:
-                /* Handle expose event, draw and swap buffers */
-                draw();
-
-                /* This is where the magic happens */
-                /* This call will NOT block.*/
-                /* It will be sync'd with vertical refresh */
-                glXSwapBuffers(display, drawable);
+                printf("Got expose event\n");
                 break;
             default:
                 break;
-        }
+          }
 
-        free(event);
+          free(event);
+        }
+        draw(offset);
+        offset++;
+
+        /* This is where the magic happens */
+        /* This call will NOT block.*/
+        /* It will be sync'd with vertical refresh */
+        glXSwapBuffers(display, drawable);
+        nanosleep(&req, &rem);
     }
 
     return 0;
 }
 
 int
-setup_and_run(Display* display,
+setup_message_loop(Display* display,
               xcb_connection_t *xcb_display,
               int default_screen,
               xcb_screen_t *screen) {
 
     int visualID = 0;
+    uint16_t width = 500;
+    uint16_t height = 500;
 
     /* Query framebuffer configurations that match visual_attribs */
     GLXFBConfig *fb_configs = 0;
@@ -115,7 +157,7 @@ setup_and_run(Display* display,
         return -1;
     }
 
-    printf("Found %d matching FB configs", num_fb_configs);
+    printf("Found %d matching FB configs\n", num_fb_configs);
 
     /* Select first framebuffer config and query visualID */
     GLXFBConfig fb_config = fb_configs[0];
@@ -127,7 +169,13 @@ setup_and_run(Display* display,
     /* This is how we can use the Xlib GLX functions */
     /* Since these XIDs are transferrable between xcb and xlib */
     xcb_colormap_t colormap = getColorMap(xcb_display, screen, visualID);
-    xcb_window_t window = getWindow(xcb_display, colormap, visualID, screen);
+
+    xcb_window_t window = getWindow(xcb_display,
+                                    colormap,
+                                    visualID,
+                                    screen,
+                                    width,
+                                    height);
 
     /* NOTE: window must be mapped before glXMakeContextCurrent */
     xcb_map_window(xcb_display, window);
@@ -159,6 +207,7 @@ setup_and_run(Display* display,
 
     /* make OpenGL context current */
     /* This will allow us to write to it with the GLX functions */
+    /* https://www.khronos.org/registry/OpenGL-Refpages/gl2.1/xhtml/glXMakeContextCurrent.xml */
     if (!glXMakeContextCurrent(display,
                                drawable,
                                drawable,
@@ -171,8 +220,11 @@ setup_and_run(Display* display,
         return -1;
     }
 
-    /* run main loop */
-    int retval = main_loop(display, xcb_display, window, drawable);
+    /* run message loop */
+    int retval = message_loop(display,
+                              xcb_display,
+                              window,
+                              drawable);
 
     /* Cleanup */
     glXDestroyWindow(display, glxwindow);
@@ -191,6 +243,12 @@ getGLXContext(Display *display,
   GLXContext context;
 
   /* Create OpenGL context */
+  /* Display* dpy
+   * GLXFBConfig config
+   * int render_type
+   * GLXContext share_list
+   * Bool direct (indicates we want direct rendering)
+   */
   context = glXCreateNewContext(display,
                                 fb_config,
                                 GLX_RGBA_TYPE,
@@ -228,7 +286,9 @@ xcb_window_t
 getWindow(xcb_connection_t *xcb_display,
           xcb_colormap_t colormap,
           int visualID,
-          xcb_screen_t *screen) {
+          xcb_screen_t *screen,
+          uint16_t width,
+          uint16_t height) {
     xcb_window_t window = xcb_generate_id(xcb_display);
 
     /* Create window */
@@ -241,9 +301,9 @@ getWindow(xcb_connection_t *xcb_display,
         XCB_COPY_FROM_PARENT,
         window,
         screen->root,
-        0, 0,
-        150, 150,
-        0,
+        0, 0, /* x y */
+        width, height, /* width height */
+        0, /* border width */
         XCB_WINDOW_CLASS_INPUT_OUTPUT,
         visualID,
         valuemask,
@@ -307,8 +367,8 @@ getScreen(xcb_connection_t *xcb_display,
     return screen_iter.data;
 }
 
-int main(int argc, char* argv[])
-{
+int
+main(void) {
     Display *display = getDisplay();
 
     /* Get the XCB connection from the display */
@@ -323,7 +383,7 @@ int main(int argc, char* argv[])
     xcb_screen_t *screen = getScreen(xcb_display, default_screen);
 
     /* Initialize window and OpenGL context, run main loop and deinitialize */
-    int retval = setup_and_run(display, xcb_display, default_screen, screen);
+    int retval = setup_message_loop(display, xcb_display, default_screen, screen);
 
     /* Cleanup */
     XCloseDisplay(display);
