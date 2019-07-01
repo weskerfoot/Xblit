@@ -193,10 +193,9 @@ allocatePixmap(xcb_connection_t *display,
   return pixmapId;
 }
 
-
 xcb_point_t*
-genPoints(uint16_t height,
-          uint16_t width) {
+genPoints(uint16_t width,
+          uint16_t height) {
   xcb_point_t *points = malloc( sizeof(xcb_point_t) * height * width);
 
   xcb_point_t point;
@@ -205,8 +204,8 @@ genPoints(uint16_t height,
 
   printf("width = %d, height = %d\n", width, height);
 
-  for (uint16_t x = 0; x < height; x++) {
-    for(uint16_t y = 0; y < width; y++) {
+  for (uint16_t x = 0; x < width; x++) {
+    for(uint16_t y = 0; y < height; y++) {
       point.x = x;
       point.y = y;
       points[i] = point;
@@ -310,10 +309,10 @@ main(void) {
                         pixmap,
                         window,
                         gc,
-                        expose->x, /* top left x coord */
-                        expose->y, /* top left y coord */
-                        expose->x, /* top left x coord of dest*/
-                        expose->y, /* top left y coord of dest*/
+                        0, /* top left x coord */
+                        0, /* top left y coord */
+                        0, /* top left x coord of dest*/
+                        0, /* top left y coord of dest*/
                         window_width, /* pixel width of source */
                         window_height /* pixel height of source */
                         );
