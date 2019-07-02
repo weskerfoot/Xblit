@@ -375,6 +375,8 @@ main(void) {
                       window,
                       expose);
           was_exposed = 1;
+          free(points);
+
           break;
         }
 
@@ -397,9 +399,13 @@ main(void) {
                   display,
                   window,
                   expose);
+
+      free(points);
     }
 
     draw_color.r += 100;
+    draw_color.g -= 100;
+
 
     /* General strategy for writing to buffer
      * Function should take point(s), color, and write it
