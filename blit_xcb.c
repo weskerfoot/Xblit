@@ -13,6 +13,14 @@ typedef struct {
   unsigned short b;
 } color_t;
 
+typedef struct {
+  xcb_point_t *points;
+  uint16_t width;
+  uint16_t height;
+  uint16_t x_origin;
+  uint16_t y_origin;
+} points_t;
+
 xcb_alloc_color_reply_t*
 getColorFromCmap(xcb_connection_t*,
                  xcb_colormap_t,
@@ -190,20 +198,24 @@ updateGCColor(xcb_connection_t *display,
                        values);
 }
 
-xcb_point_t*
+points_t
 genPoints(uint16_t width,
-          uint16_t height) {
+          uint16_t height,
+          uint16_t x_offset,
+          uint16_t y_offset) {
   /* Fills the entire screen with pixels */
   xcb_point_t *points = malloc( sizeof(xcb_point_t) * height * width);
 
   xcb_point_t point;
 
+  points_t points_ret;
+
   int i = 0;
 
   for (uint16_t x = 0; x < width; x++) {
     for(uint16_t y = 0; y < height; y++) {
-      point.x = x;
-      point.y = y;
+      point.x = x + x_offset;
+      point.y = y + y_offset;
       points[i] = point;
       i++;
     }
@@ -211,7 +223,13 @@ genPoints(uint16_t width,
 
   assert(i == (width*height));
 
-  return points;
+  points_ret.x_origin = x_offset;
+  points_ret.y_origin = y_offset;
+  points_ret.points = points;
+  points_ret.height = height;
+  points_ret.width = width;
+
+  return points_ret;
 }
 
 void
@@ -219,7 +237,7 @@ displayBuffer(xcb_pixmap_t pixmap_buffer,
               xcb_connection_t *display,
               xcb_window_t window,
               xcb_gcontext_t gc,
-              xcb_expose_event_t *event) {
+              points_t points) {
   /* Note that x = 0, y = 0, is the top left of the screen */
   xcb_copy_area(display,
                 pixmap_buffer,
@@ -227,10 +245,10 @@ displayBuffer(xcb_pixmap_t pixmap_buffer,
                 gc,
                 0, /* top left x coord */
                 0, /* top left y coord */
-                event->x, /* top left x coord of dest*/
-                event->y, /* top left y coord of dest*/
-                event->width, /* pixel width of source */
-                event->height /* pixel height of source */
+                points.x_origin, /* top left x coord of dest*/
+                points.y_origin, /* top left y coord of dest*/
+                points.width, /* pixel width of source */
+                points.height /* pixel height of source */
                 );
 
   xcb_flush(display);
@@ -240,11 +258,10 @@ void
 writePixmap(xcb_pixmap_t pixmap_buffer,
             color_t color,
             xcb_colormap_t colormap,
-            xcb_point_t *points,
+            points_t points,
             xcb_gcontext_t gc,
             xcb_connection_t *display,
-            xcb_window_t window,
-            xcb_expose_event_t *event) {
+            xcb_window_t window) {
 
   printf("Drawing pixmap\nr = %u, g = %u, b = %u\n", color.r, color.g, color.b);
   updateGCColor(display,
@@ -256,14 +273,14 @@ writePixmap(xcb_pixmap_t pixmap_buffer,
                  XCB_COORD_MODE_ORIGIN, /* Coordinate mode, usually set to XCB_COORD_MODE_ORIGIN */
                  pixmap_buffer,
                  gc,
-                 event->width*event->height,
-                 points);
+                 points.width*points.height,
+                 points.points);
 
   displayBuffer(pixmap_buffer,
                 display,
                 window,
                 gc,
-                event);
+                points);
 
 }
 
@@ -347,6 +364,11 @@ main(void) {
 
   int was_exposed = 0;
 
+  int side = 0;
+  points_t points;
+  uint16_t x_offset = 0;
+  uint16_t y_offset = 0;
+
   while (1) {
     event = xcb_poll_for_event(display);
 
@@ -357,25 +379,28 @@ main(void) {
 
         case XCB_EXPOSE: {
           expose = (xcb_expose_event_t *)event;
+
           window_width = expose->width;
           window_height = expose->height;
+
           printf("Window %u exposed. Region to be redrawn at location (%u,%u), with dimension (%u,%u)\n",
                  expose->window, expose->x,
                  expose->y,
                  expose->width,
                  expose->height);
 
-          xcb_point_t *points = genPoints(window_width, window_height);
+          points = genPoints(window_width/2, window_height/2, x_offset, y_offset++);
+
           writePixmap(pixmap_buffer,
                       draw_color,
                       colormap,
                       points,
                       gc,
                       display,
-                      window,
-                      expose);
+                      window);
+
           was_exposed = 1;
-          free(points);
+          free(points.points);
 
           break;
         }
@@ -389,7 +414,7 @@ main(void) {
       }
     }
     if (was_exposed) {
-      xcb_point_t *points = genPoints(window_width, window_height);
+      points = genPoints(window_width/2, window_height/2, x_offset, y_offset++);
 
       writePixmap(pixmap_buffer,
                   draw_color,
@@ -397,15 +422,13 @@ main(void) {
                   points,
                   gc,
                   display,
-                  window,
-                  expose);
+                  window);
 
-      free(points);
+      free(points.points);
     }
 
     draw_color.r += 100;
     draw_color.g -= 100;
-
 
     /* General strategy for writing to buffer
      * Function should take point(s), color, and write it
