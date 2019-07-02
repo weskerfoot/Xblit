@@ -1,5 +1,8 @@
-#include <X11/Xlib-xcb.h> /* for XGetXCBConnection, link with libX11-xcb */
-#include <X11/Xlib.h>
+/*
+ * Note that this is a terrible way to implement a renderer, and it ends up being unwieldy with regard to colors
+ * See http://www.rahul.net/kenton/colormap.html#DoubleBuf for a potentially better way
+ */
+
 #include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
