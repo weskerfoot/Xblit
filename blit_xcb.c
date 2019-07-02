@@ -35,21 +35,6 @@ getColorFromCmap(xcb_connection_t*,
  */
 #define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
 
-/*
- * Here is the definition of xcb_cw_t
-  * This lets us define what events we want to handle
-  * See here https://xcb.freedesktop.org/tutorial/events/
-  */
-
-/* TODO
- *
- * Figure out what resources need to be free'd and figure out a strategy for allocating things better
- * Figure out a better way of managing the event loop than nanosleep? (clock_nanosleep maybe)
- * Figure out which events we need to actually be handling
- * Figure out good strategy for only copying changed pixels to window
- * Figure out what allocations can fail and what to do if they fail
- */
-
 xcb_connection_t*
 getDisplay() {
   /* Get a display to use */
@@ -136,12 +121,6 @@ getColorFromCmap(xcb_connection_t *display,
                                                                          color.g,
                                                                          color.b),
                                                          NULL);
-
-  /* TODO, make sure colors get free'd after they're used?
-   * Might not be necessary to free them if we only ever allocate one of each color
-   * Linux will make sure resources are cleaned up after the program exits
-   * We just have to make sure we don't leak colors
-   */
 
   return reply;
 }
@@ -377,9 +356,6 @@ main(void) {
 
     if (event != NULL) {
       switch RECEIVE_EVENT(event) {
-
-        /* TODO encapsulate event handlers in functions */
-
         case XCB_EXPOSE: {
           expose = (xcb_expose_event_t *)event;
 
@@ -432,10 +408,6 @@ main(void) {
 
     draw_color.r += 100;
     draw_color.g -= 100;
-
-    /* General strategy for writing to buffer
-     * Function should take point(s), color, and write it
-     */
 
     nanosleep(&req, &rem);
   }
