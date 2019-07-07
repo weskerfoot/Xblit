@@ -1,5 +1,6 @@
 #include <GL/gl.h>
 #include <GL/glx.h>
+#include <GL/glu.h>
 #include <X11/Xlib-xcb.h> /* for XGetXCBConnection, link with libX11-xcb */
 #include <X11/Xlib.h>
 #include <assert.h>
@@ -52,24 +53,18 @@ static int visual_attribs[] = {
  */
 #define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
 
-void draw(GLint offset) {
-  /* This is needed because now the contents of `drawable` are undefined */
-
-  printf("Drawing!\n");
-
-  glClearColor(0.0, 0.0, 0.0, 1.0);
-  glClear(GL_COLOR_BUFFER_BIT);
-
-  glMatrixMode(GL_PROJECTION);
-  glLoadIdentity();
-  glOrtho(0.0, 500, 500, 0.0, 0.0, 1.0);
-
-  glBegin(GL_POINTS);
-  for (int i = 0; i < 100; i++) {
-    glVertex2i(offset, i);
-  }
-  glEnd();
-
+void draw(uint16_t height,
+          uint16_t width) {
+   // Draw a Red 1x1 Square centered at origin
+   glBegin(GL_QUADS);              // Each set of 4 vertices form a quad
+      glColor3f(1.0f, 0.0f, 0.0f); // Red
+      glVertex2f(-0.5f, -0.5f);    // x, y
+      glVertex2f( 0.5f, -0.5f);
+      glVertex2f( 0.5f,  0.5f);
+      glVertex2f(-0.5f,  0.5f);
+   glEnd();
+ 
+   glFlush();  // Render now
 }
 
 static struct timespec
@@ -85,19 +80,29 @@ int
 message_loop(Display *display,
              xcb_connection_t *xcb_display,
              xcb_window_t window,
+             xcb_screen_t *screen,
              GLXDrawable drawable) {
 
     int running = 1;
 
-
     glClearColor(0.0, 0.0, 0.0, 1.0);
     glClear(GL_COLOR_BUFFER_BIT);
 
-    GLint offset = 0;
+    GLint x_offset = 0;
 
     /* Used to handle the event loop */
     struct timespec req = genSleep(0, 20000000);
     struct timespec rem = genSleep(0, 0);
+
+    xcb_expose_event_t *expose;
+
+    uint16_t window_height = screen->height_in_pixels;
+    uint16_t window_width = screen->width_in_pixels;
+
+    int exposed = 0;
+
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f); // Set background color to black and opaque
+    glClear(GL_COLOR_BUFFER_BIT);         // Clear the color buffer (background)
 
     while (running) {
         /* Poll for events */
@@ -111,7 +116,13 @@ message_loop(Display *display,
                 // running = 0;
                 break;
             case XCB_EXPOSE:
+                expose = (xcb_expose_event_t *)event;
+
+                window_height = expose->height;
+                window_width = expose->width;
+
                 printf("Got expose event\n");
+                exposed = 1;
                 break;
             default:
                 break;
@@ -119,28 +130,29 @@ message_loop(Display *display,
 
           free(event);
         }
-        draw(offset);
-        offset++;
 
-        /* This is where the magic happens */
-        /* This call will NOT block.*/
-        /* It will be sync'd with vertical refresh */
-        glXSwapBuffers(display, drawable);
-        nanosleep(&req, &rem);
+        if (exposed) {
+          draw(window_width, window_height);
+
+          /* This is where the magic happens */
+          /* This call will NOT block.*/
+          /* It will be sync'd with vertical refresh */
+          glXSwapBuffers(display, drawable);
+          nanosleep(&req, &rem);
+        }
     }
-
     return 0;
 }
 
 int
 setup_message_loop(Display* display,
-              xcb_connection_t *xcb_display,
-              int default_screen,
-              xcb_screen_t *screen) {
+                   xcb_connection_t *xcb_display,
+                   int default_screen,
+                   xcb_screen_t *screen) {
 
     int visualID = 0;
-    uint16_t width = 500;
-    uint16_t height = 500;
+    uint16_t width = screen->width_in_pixels;
+    uint16_t height = screen->height_in_pixels;
 
     /* Query framebuffer configurations that match visual_attribs */
     GLXFBConfig *fb_configs = 0;
@@ -192,8 +204,7 @@ setup_message_loop(Display* display,
             display,
             fb_config,
             window,
-            0
-            );
+            0);
 
     if (!window) {
         xcb_destroy_window(xcb_display, window);
@@ -224,6 +235,7 @@ setup_message_loop(Display* display,
     int retval = message_loop(display,
                               xcb_display,
                               window,
+                              screen,
                               drawable);
 
     /* Cleanup */
@@ -383,7 +395,10 @@ main(void) {
     xcb_screen_t *screen = getScreen(xcb_display, default_screen);
 
     /* Initialize window and OpenGL context, run main loop and deinitialize */
-    int retval = setup_message_loop(display, xcb_display, default_screen, screen);
+    int retval = setup_message_loop(display,
+                                    xcb_display,
+                                    default_screen,
+                                    screen);
 
     /* Cleanup */
     XCloseDisplay(display);
