@@ -8,6 +8,11 @@
 #include <unistd.h>
 #include <xcb/xcb.h>
 
+/* Macro definition to parse X server events
+ * The ~0x80 is needed to get the lower 7 bits
+ */
+#define RECEIVE_EVENT(ev) (ev->response_type & ~0x80)
+
 void
 print_cairo_format(cairo_format_t format) {
   switch (format) {
@@ -79,21 +84,24 @@ allocScreen(xcb_connection_t *display) {
 }
 
 void
-swapBuffers(cairo_t *front_cr,
-            cairo_surface_t *backbuffer_surface,
-            unsigned char v,
-            int height) {
-
+draw(cairo_surface_t *backbuffer_surface,
+     int v,
+     uint16_t width,
+     uint16_t height) {
   int stride = cairo_image_surface_get_stride(backbuffer_surface);
-
   unsigned char *data = cairo_image_surface_get_data(backbuffer_surface);
+
+  /* Manpiulate the actual pixel data here */
+  memset(data, v, stride*height);
+}
+
+void
+swapBuffers(cairo_t *front_cr,
+            cairo_surface_t *backbuffer_surface) {
 
   /* Needed to ensure all pending draw operations are done */
   cairo_surface_flush(backbuffer_surface);
 
-  /* Manpiulate the actual pixel data here */
-  memset(data, v, stride*height);
- 
   /* Make sure that cached areas are re-read */ 
   /* Since we modified the pixel data directly without using cairo */
   cairo_surface_mark_dirty(backbuffer_surface);
@@ -173,7 +181,11 @@ allocWindow(xcb_connection_t *display,
   /* XCB_EVENT_MASK_EXPOSURE is the "exposure" event */
   /* I.e. it fires when our window shows up on the screen */
 
-  uint32_t valwin[2] = {screen->white_pixel, XCB_EVENT_MASK_EXPOSURE};
+  uint32_t eventmask = (XCB_EVENT_MASK_EXPOSURE |
+                        XCB_EVENT_MASK_STRUCTURE_NOTIFY |
+                        XCB_EVENT_MASK_KEY_PRESS);
+
+  uint32_t valwin[2] = {screen->white_pixel, eventmask};
 
   xcb_create_window(display,
                     XCB_COPY_FROM_PARENT,  /* depth (same as root) */
@@ -201,12 +213,89 @@ genSleep(time_t sec,
   return t;
 }
 
-int
-main (void) {
-  /* Used to handle the event loop */
+void
+message_loop(xcb_connection_t *display,
+             xcb_screen_t *screen,
+             cairo_surface_t *frontbuffer_surface,
+             cairo_surface_t *backbuffer_surface,
+             cairo_t *front_cr) {
+
   struct timespec req = genSleep(0, 20000000);
   struct timespec rem = genSleep(0, 0);
 
+  xcb_configure_notify_event_t *configure_notify;
+  xcb_key_press_event_t *key_event;
+
+  int exposed = 0;
+  int running = 1;
+  uint16_t window_height = screen->height_in_pixels;
+  uint16_t window_width = screen->width_in_pixels;
+
+  int v = 0;
+
+  while (running) {
+      /* Poll for events */
+
+      xcb_generic_event_t *event = xcb_poll_for_event(display);
+
+      if (event != NULL) {
+        switch (RECEIVE_EVENT(event)) {
+          case XCB_KEY_PRESS:
+              /* Quit on key press */
+              key_event = (xcb_key_press_event_t *)event;
+              printf("%u\n", key_event->detail);
+              if (key_event->detail == 24) {
+                running = 0;
+              }
+              break;
+          case XCB_EXPOSE:
+              printf("Got expose event\n");
+              exposed = 1;
+              break;
+
+          case XCB_CONFIGURE_NOTIFY:
+              configure_notify = (xcb_configure_notify_event_t *)event;
+
+              cairo_surface_flush(frontbuffer_surface);
+              cairo_surface_flush(backbuffer_surface);
+              cairo_xcb_surface_set_size(frontbuffer_surface,
+                                         configure_notify->width,
+                                         configure_notify->height);
+
+              window_height = configure_notify->height;
+              window_width = configure_notify->width;
+
+              printf("Got configure_notify event, w = %u, h = %u\n",
+                     window_width,
+                     window_height);
+
+              break;
+          default:
+              break;
+        }
+
+        free(event);
+      }
+
+      if (exposed) {
+        draw(backbuffer_surface,
+             v,
+             window_width,
+             window_height);
+
+        /* This is where the magic happens */
+        swapBuffers(front_cr,
+                    backbuffer_surface);
+        xcb_flush(display);
+
+        nanosleep(&req, &rem);
+        v++;
+      }
+  }
+}
+
+int
+main (void) {
   /* Open up the display */
   xcb_connection_t *display = allocDisplay();
 
@@ -242,19 +331,11 @@ main (void) {
 
   cairo_t *back_cr = cairo_create(backbuffer_surface);
 
-  unsigned char v = 0;
-
-  while (1) {
-    swapBuffers(front_cr,
-                backbuffer_surface,
-                v,
-                window_height);
-    xcb_flush(display);
-    nanosleep(&req, &rem);
-    v++;
-  }
-
-  pause();
+  message_loop(display,
+               screen,
+               frontbuffer_surface,
+               backbuffer_surface,
+               front_cr);
 
   cairo_destroy(back_cr);
   cairo_surface_destroy(backbuffer_surface);
