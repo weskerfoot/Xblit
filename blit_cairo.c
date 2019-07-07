@@ -88,9 +88,15 @@ swapBuffers(cairo_t *front_cr,
 
   unsigned char *data = cairo_image_surface_get_data(backbuffer_surface);
 
-  memset(data, v, stride*height);
-
+  /* Needed to ensure all pending draw operations are done */
   cairo_surface_flush(backbuffer_surface);
+
+  /* Manpiulate the actual pixel data here */
+  memset(data, v, stride*height);
+ 
+  /* Make sure that cached areas are re-read */ 
+  /* Since we modified the pixel data directly without using cairo */
+  cairo_surface_mark_dirty(backbuffer_surface);
 
   cairo_set_source_surface(front_cr,
                            backbuffer_surface,
@@ -150,7 +156,6 @@ allocDisplay() {
     fprintf(stderr, "Could not open the display! :(\n");
     exit(1);
   }
-
   return display;
 }
 
@@ -198,7 +203,6 @@ genSleep(time_t sec,
 
 int
 main (void) {
-
   /* Used to handle the event loop */
   struct timespec req = genSleep(0, 20000000);
   struct timespec rem = genSleep(0, 0);
